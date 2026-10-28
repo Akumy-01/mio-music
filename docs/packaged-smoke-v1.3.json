@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "checks": [
+    "ffmpeg decode",
+    "scipy STFT",
+    "offline Japanese dictionary",
+    "FLAC tags",
+    "backup and restore SHA-256",
+    "native Qt window render",
+    "GUI write plan / asynchronous save / selected-record undo",
+    "Spotify HTTP protocol (local fixture, not live account)",
+    "Windows Credential Manager isolated fixture roundtrip",
+    "Spotify in-process flow / dialog (mock protocol, not live account)"
+  ],
+  "verdict": "未见明显转码迹象"
+}

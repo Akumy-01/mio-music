@@ -133,3 +133,31 @@ def test_same_second_history_selects_latest_append(tmp_path):
     w.list.setCurrentRow(0)
     assert w.write_panel.selected_record()['record_id'] == 'latest'
     w.close()
+
+
+def test_spotify_link_in_search_box_fetches_directly_with_saved_session(monkeypatch):
+    from mio import ui, spotify_direct
+    from mio.lyrics import LyricsPayload
+    class Settings:
+        def value(self, key, default=None): return default
+    monkeypatch.setattr(ui, 'QSettings', lambda *a: Settings())
+    monkeypatch.setattr(spotify_direct, 'get_session', lambda: 'fixture-saved-session')
+    received = []
+    def fetch(row, refresh=False):
+        received.append(row)
+        return LyricsPayload('[00:01.00]original direct fixture')
+    monkeypatch.setattr(ui, 'fetch_lyrics', fetch)
+    app = QApplication.instance() or QApplication([])
+    w = Window()
+    w.tracks = [Track('C:/example.flac', 'Example')]
+    w.list.addItem('Example')
+    w.list.setCurrentRow(0)
+    w.title_edit.setText('https://open.spotify.com/track/5f8eCNwTlr0RJopE9vQ6mB')
+    w.search_lyrics()
+    wait_for_job(w)
+    assert received[0]['mode'] == 'direct' and 'endpoint' not in received[0]
+    assert 'fixture-saved-session' not in str(received)
+    assert w.lyrics.toPlainText().endswith('original direct fixture')
+    assert 'Spotify' in w.lyrics_source.text()
+    assert w.write_panel.plan().lyrics.endswith('original direct fixture')
+    w.close()

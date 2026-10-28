@@ -106,6 +106,43 @@ def run(output_path):
                 server.shutdown()
                 server.server_close()
                 thread.join()
+            # Exercise the in-process flow in the shipped EXE, with isolated fixtures only.
+            from unittest.mock import patch
+            from . import spotify_direct as direct
+            from .spotify_dialog import SpotifyDialog
+            from .credentials import CredentialStore
+            from .lyrics import fetch_lyrics
+            import time
+            import uuid
+            test_store = CredentialStore('MioMusic/Tests/' + str(uuid.uuid4()))
+            try:
+                test_store.write('packaged-fixture-not-a-real-session')
+                assert test_store.read() == 'packaged-fixture-not-a-real-session'
+            finally:
+                test_store.delete()
+            calls = []
+            def direct_fixture(url, params=None, headers=None):
+                calls.append(url)
+                if url == direct.TIME_URL: return {'serverTime': 59}
+                if url == direct.PARAMETERS_URL: return {'61': [2, 5, 8]}
+                if url == direct.TOKEN_URL:
+                    assert headers['Cookie'] == 'sp_dc=packaged-fixture-not-a-real-session'
+                    return {'accessToken': 'fixture-token', 'isAnonymous': False,
+                            'accessTokenExpirationTimestampMs': (time.time()+3600)*1000}
+                assert url.startswith(direct.LYRICS_URL)
+                assert 'Cookie' not in headers and headers['Authorization'] == 'Bearer fixture-token'
+                return {'lyrics': {'syncType': 'LINE_SYNCED',
+                    'lines': [{'startTimeMs': '1230', 'words': 'direct protocol fixture'}]}}
+            with patch.object(direct, '_session', 'packaged-fixture-not-a-real-session'), \
+                 patch.object(direct, '_tokens', {}), patch.object(direct, 'request_json', direct_fixture):
+                payload = fetch_lyrics({'source': 'spotify', 'mode': 'direct', 'id': '5f8eCNwTlr0RJopE9vQ6mB'})
+                assert payload.text == '[00:01.23]direct protocol fixture'
+                dialog = SpotifyDialog(w)
+                dialog.show()
+                app.processEvents()
+                assert not dialog.grab().isNull()
+                dialog.close()
+            assert len(calls) == 4
             w.resize(1280, 880)
             w.show()
             app.processEvents()
@@ -114,7 +151,9 @@ def run(output_path):
             result = {'ok': True, 'checks': ['ffmpeg decode', 'scipy STFT', 'offline Japanese dictionary',
                       'FLAC tags', 'backup and restore SHA-256', 'native Qt window render',
                       'GUI write plan / asynchronous save / selected-record undo',
-                      'Spotify HTTP protocol (local fixture, not live account)'],
+                      'Spotify HTTP protocol (local fixture, not live account)',
+                      'Windows Credential Manager isolated fixture roundtrip',
+                      'Spotify in-process flow / dialog (mock protocol, not live account)'],
                       'verdict': a.verdict}
     except Exception:
         result['error'] = traceback.format_exc()

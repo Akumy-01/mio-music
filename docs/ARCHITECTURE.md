@@ -85,3 +85,9 @@ Qt Multimedia 改为按需加载，保存/恢复前通过 shiboken 同步销毁�
 成功记录带唯一 record_id、原始路径、目标路径、实际变更字段和来源；UI 使用表格展示，运行诊断独立。撤销通过唯一 ID 记录，仍校验文件前后哈希，避免把已变化文件覆盖成旧版本。
 
 `mio/spotify.py` 调用用户自建服务的 trackid / format=lrc 协议，支持原始毫秒和 LRC timeTag 结构，区分无同步歌词；不接收或保存 Cookie。服务地址不允许嵌入凭据，回环可 HTTP，远端要求 HTTPS，禁跟随重定向；错误不回显服务敏感响应。可选 Docker 服务源码固定上游提交，启用 TLS、限制超时并只监听本机映射。未完成实际 Spotify 账号访问验证。
+
+## 1.3 内置 Spotify 适配
+
+`spotify_direct.py` 把自有会话令牌获取和歌词请求移入进程，保留 `spotify.py` 解析器及高级服务适配。独立 `credentials.py` 通过 ctypes 调用 Windows CredRead / CredWrite / CredDelete，只操作本应用的凭据目标，无明文回退。用户手动输入 SP_DC；访问令牌缓存仅在内存，会话仅发送给 Spotify token origin，访问令牌仅发送给歌词 origin，公共参数请求不带凭据。错误对用户做脱敏。
+
+`spotify_dialog.py` 处理首次配置和高级服务模式，只将公开歌曲标识和模式交给后台任务。主界面搜索入口识别 Spotify URL / URI，已有会话直接获取，否则打开预填链接的配置窗口。真实账号可用性未验证；测试以隔离协议响应和单独凭据目标执行。

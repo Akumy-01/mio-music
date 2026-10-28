@@ -46,3 +46,7 @@ The Mio icon and documentation example text/audio are generated specifically for
 ## Optional Spotify service
 
 Includes modified source from https://github.com/akashrchandran/spotify-lyrics-api at commit e158b96b854778d8ff51a3c9544ebb4f68b64907, licensed GPL-3.0-only. Copyright Akash R Chandran and upstream contributors. Full upstream LICENSE, source and modification notice retained in integrations/spotify-lyrics-api. No Spotify account credentials are distributed. The upstream is unofficial and warns about service terms. See docs/SPOTIFY.md for configuration and validation limits.
+
+## Built-in Spotify adapter (1.3)
+
+mio/spotify_direct.py is a Python port of the own-session token and lyrics flow from akashrchandran/spotify-lyrics-api (upstream commit above), GPL-3.0-only, Copyright Akash R Chandran and contributors; port and changes Copyright 2026 Mio contributors. Protocol parameters are fetched at runtime from https://github.com/xyloflake/spot-secrets-go (secretDict.json), without user credentials; this is an external availability dependency. Native Windows Credential Manager storage and the Qt setup UI are Mio implementations. No account credentials or tokens are bundled. Actual logged-in Spotify retrieval has not been validated.

@@ -277,7 +277,8 @@ class Window(QMainWindow):
         box.setContentsMargins(0, 14, 0, 0)
         row = QHBoxLayout()
         self.title_edit = QLineEdit()
-        self.title_edit.setPlaceholderText('搜索用曲名')
+        self.title_edit.setPlaceholderText('搜索用曲名 / Spotify 歌曲链接')
+        self.title_edit.setToolTip('粘贴 Spotify 歌曲链接后点击查找：已配置会话时直接获取。')
         self.artist_edit = QLineEdit()
         self.artist_edit.setPlaceholderText('搜索用歌手')
         row.addWidget(self.title_edit, 1)
@@ -320,7 +321,7 @@ class Window(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(button('导入 LRC', self.load_lrc))
         row.addWidget(button('导出当前歌词', self.export_lrc))
-        row.addWidget(button('Spotify 链接…', self.spotify_dialog))
+        row.addWidget(button('Spotify 获取…', self.spotify_dialog))
         row.addStretch()
         self.roma_btn = button('生成日语罗马音', self.make_romaji)
         row.addWidget(self.roma_btn)
@@ -429,42 +430,36 @@ class Window(QMainWindow):
         self.refresh_write_panel()
         self.write_panel.select_cover(key)
 
-    def spotify_dialog(self):
-        settings = QSettings('MioMusic', 'MioMusic')
-        dialog = QDialog(self)
-        dialog.setWindowTitle('Spotify 歌词 · spotify-lyrics-api')
-        dialog.resize(620, 310)
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(label('连接你自己的歌词服务，粘贴 Spotify 歌曲链接获取。'))
-        layout.addWidget(label('服务地址', 'muted'))
-        endpoint = QLineEdit(settings.value('spotify/endpoint', 'http://127.0.0.1:8765/'))
-        layout.addWidget(endpoint)
-        song = QLineEdit()
-        song.setPlaceholderText('https://open.spotify.com/track/… 或 Track ID')
-        layout.addWidget(song)
-        layout.addWidget(label('SP_DC 登录会话只配置在你自己的服务端。本窗口不读取浏览器 Cookie，也不向公共代理提交登录凭据。', 'muted'))
-        notice = label('未配置服务时，请先按部署说明启动 spotify-lyrics-api。', 'muted')
-        notice.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(notice)
-        layout.addWidget(button('查看本地服务部署说明', lambda: QDesktopServices.openUrl(QUrl('https://github.com/Akumy-01/mio-music/blob/main/docs/SPOTIFY.md'))))
-        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        controls.button(QDialogButtonBox.StandardButton.Ok).setText('获取并预览')
-        controls.rejected.connect(dialog.reject)
-        result = {}
-        def validate():
-            try:
-                result['endpoint'] = endpoint_url(endpoint.text())
-                result['id'] = track_id(song.text())
-                dialog.accept()
-            except ValueError as e:
-                notice.setText(str(e))
-        controls.accepted.connect(validate)
-        layout.addWidget(controls)
+    def spotify_dialog(self, prefill=''):
+        from .spotify_dialog import SpotifyDialog
+        dialog = SpotifyDialog(self)
+        if isinstance(prefill, str) and prefill:
+            dialog.song.setText(prefill)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            settings.setValue('spotify/endpoint', result['endpoint'])
-            self.choose_lyrics(-1, {'source': 'spotify', 'sourceLabel': 'Spotify', 'id': result['id'],
-                'endpoint': result['endpoint'], 'sourceUrl': 'https://open.spotify.com/track/' + result['id'],
+            result = dialog.result_config
+            self.choose_lyrics(-1, {'source': 'spotify', 'sourceLabel': 'Spotify', **result,
+                'sourceUrl': 'https://open.spotify.com/track/' + result['id'],
                 'trackName': self.current().title if self.current() else result['id']})
+
+    def spotify_link(self, value):
+        from . import spotify_direct
+        try:
+            ident = track_id(value)
+            settings = QSettings('MioMusic', 'MioMusic')
+            mode = settings.value('spotify/mode', 'direct')
+            if mode not in ('direct', 'service'):
+                mode = 'direct'
+            row = {'source': 'spotify', 'sourceLabel': 'Spotify', 'id': ident, 'mode': mode,
+                   'sourceUrl': 'https://open.spotify.com/track/' + ident,
+                   'trackName': self.current().title if self.current() else ident}
+            if mode == 'service':
+                row['endpoint'] = endpoint_url(settings.value('spotify/endpoint', 'http://127.0.0.1:8765/'))
+            elif not spotify_direct.get_session():
+                self.spotify_dialog(value)
+                return
+            self.choose_lyrics(-1, row)
+        except ValueError:
+            self.spotify_dialog(value)
 
     def current(self):
         i = self.list.currentRow()
@@ -687,6 +682,10 @@ class Window(QMainWindow):
                 self.error(str(e))
 
     def search_lyrics(self):
+        value = self.title_edit.text().strip()
+        if value.startswith(('https://open.spotify.com/', 'spotify:track:')):
+            self.spotify_link(value)
+            return
         try:
             t = self.edited_track()
         except ValueError as e:

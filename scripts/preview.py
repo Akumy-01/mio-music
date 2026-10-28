@@ -60,6 +60,18 @@ def capture():
             QTimer.singleShot(350, shot3)
         def shot3():
             w.grab().save(str(root / 'docs' / 'screenshot-write.png'))
+            from unittest.mock import patch
+            from mio.spotify_dialog import SpotifyDialog
+            from mio import spotify_direct
+            with patch.object(spotify_direct, 'get_session', return_value=None):
+                dialog = SpotifyDialog(w)
+                dialog.mode.setCurrentIndex(0)
+                dialog.song.setText('https://open.spotify.com/track/…')
+                dialog.resize(760, 560)
+                dialog.show()
+                app.processEvents()
+                dialog.grab().save(str(root / 'docs' / 'screenshot-spotify.png'))
+                dialog.close()
             from PySide6.QtCore import QUrl
             w.player.setSource(QUrl())
             app.quit()

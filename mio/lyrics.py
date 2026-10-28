@@ -247,6 +247,9 @@ def _lyric_field(data, key):
 def fetch_lyrics(row, refresh=False) -> LyricsPayload:
     source = row['source']
     if source == 'spotify':
+        if row.get('mode') == 'direct':
+            from .spotify_direct import fetch_direct
+            return fetch_direct(row['id'])
         from .spotify import fetch_spotify
         return fetch_spotify(row['endpoint'], row['id'])
     client = Client(refresh=refresh)
