@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import traceback
+import html
 from dataclasses import replace
 
 import numpy as np
@@ -17,7 +18,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from .core import (Track, Analysis, read_track, analyze, romanize, write_tags, restore,
                    SUPPORTED, WRITABLE, image_bytes)
-from .providers import find_lyrics, find_covers, download_cover
+from .providers import find_covers, download_cover
+from .lyrics import search_lyrics as search_online_lyrics, fetch_lyrics, merge_lrc, PROVIDERS
+from . import __version__
 
 STYLE = '''
 QWidget { background:#f5f5f1; color:#24372f; font-family:"Microsoft YaHei UI"; font-size:13px; }
@@ -60,16 +63,18 @@ QStatusBar { background:#edf0e8; color:#697c64; }
 class JobSignals(QObject):
     done = Signal(object)
     failed = Signal(str)
+    progress = Signal(object)
 
 
 class Job(QRunnable):
-    def __init__(self, fn):
+    def __init__(self, fn, with_progress=False):
         super().__init__()
         self.fn, self.signals = fn, JobSignals()
+        self.with_progress = with_progress
 
     def run(self):
         try:
-            self.signals.done.emit(self.fn())
+            self.signals.done.emit(self.fn(self.signals.progress.emit) if self.with_progress else self.fn())
         except Exception as e:
             self.signals.failed.emit(str(e) or type(e).__name__)
 
@@ -198,7 +203,7 @@ class Window(QMainWindow):
         top = QHBoxLayout()
         top.addWidget(label('YOUR MUSIC, WHOLE AGAIN', 'eyebrow'))
         top.addStretch()
-        top.addWidget(label('●  本地优先   /   v1.0', 'muted'))
+        top.addWidget(label(f'●  本地优先   /   v{__version__}', 'muted'))
         layout.addLayout(top)
         layout.addWidget(label('让每一首歌，完整如初。', 'heading'))
         layout.addWidget(label('看见音质 · 找回歌词 · 补全封面', 'muted'))
@@ -273,13 +278,30 @@ class Window(QMainWindow):
         self.artist_edit.setPlaceholderText('搜索用歌手')
         row.addWidget(self.title_edit, 1)
         row.addWidget(self.artist_edit, 1)
+        self.lyrics_provider = QComboBox()
+        self.lyrics_provider.addItem('自动 · 多源', 'auto')
+        for key, name in PROVIDERS.items():
+            self.lyrics_provider.addItem(name, key)
+        self.lyrics_provider.setToolTip('自动模式并行搜索；单个来源失败不会中断其他来源')
+        row.addWidget(self.lyrics_provider)
         self.search_lyrics_btn = button('查找歌词', self.search_lyrics, True)
         row.addWidget(self.search_lyrics_btn)
         box.addLayout(row)
         self.candidates = QComboBox()
-        self.candidates.addItem('选择匹配版本 · 来源 LRCLIB')
+        self.candidates.addItem('选择匹配版本 · 网易云 / 酷狗 / LRCLIB')
         self.candidates.currentIndexChanged.connect(self.choose_lyrics)
         box.addWidget(self.candidates)
+        self.provider_status = label('多源自动查询 · 单源故障自动跳过 · 选择候选后获取歌词', 'muted')
+        box.addWidget(self.provider_status)
+        options = QHBoxLayout()
+        self.include_translation = QCheckBox('带上来源提供的译文')
+        self.include_translation.setChecked(True)
+        self.include_translation.setToolTip('在选择下一个候选时应用；不会自动翻译歌词')
+        options.addWidget(self.include_translation)
+        self.refresh_lyrics = QCheckBox('重新联网（跳过新鲜缓存）')
+        options.addWidget(self.refresh_lyrics)
+        options.addStretch()
+        box.addLayout(options)
         split = QSplitter()
         self.lyrics = QTextEdit()
         self.lyrics.setPlaceholderText('在线匹配后在此预览、校对歌词。\n也可以粘贴歌词或导入本地 .lrc / .txt。')
@@ -371,7 +393,7 @@ class Window(QMainWindow):
         self.tabs.setEnabled(enabled)
         self.play.setEnabled(enabled)
 
-    def job(self, title, fn, success):
+    def job(self, title, fn, success, *, on_progress=None, with_progress=False, on_error=None):
         if self.busy:
             return
         self.busy = True
@@ -379,7 +401,7 @@ class Window(QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.show()
         self.status.setText(title)
-        job = Job(fn)
+        job = Job(fn, with_progress)
         self.active_job = job
         def finish():
             self.busy = False
@@ -394,9 +416,14 @@ class Window(QMainWindow):
                 self.error(str(e))
         def fail(message):
             finish()
-            self.error(message)
+            if on_error:
+                on_error(message)
+            else:
+                self.error(message)
         job.signals.done.connect(done)
         job.signals.failed.connect(fail)
+        if on_progress:
+            job.signals.progress.connect(on_progress)
         self.pool.start(job)
 
     def error(self, message):
@@ -475,8 +502,9 @@ class Window(QMainWindow):
         self.pending_cover = None
         self.candidates.blockSignals(True)
         self.candidates.clear()
-        self.candidates.addItem('选择匹配版本 · 来源 LRCLIB')
+        self.candidates.addItem('选择匹配版本 · 网易云 / 酷狗 / LRCLIB')
         self.candidates.blockSignals(False)
+        self.provider_status.setText('多源自动查询 · 单源故障自动跳过 · 选择候选后获取歌词')
         self.cover_candidates.clear()
         self.cover_candidates.addItem('选择发行版本 · 来源 MusicBrainz')
         t = self.current()
@@ -502,6 +530,7 @@ class Window(QMainWindow):
         self.show_art(self.cover_preview, t.cover)
         self.cover_info.setText('已有内嵌封面 · 自动保留' if t.cover else '尚无内嵌封面 · 可在线匹配或选择本地图片')
         self.lyrics_source.setText('当前来自本地文件' if t.lyrics else '尚无歌词 · 可以联网匹配或导入本地歌词')
+        self.lyrics_source.setTextFormat(Qt.TextFormat.AutoText)
         draft = self.drafts.get(t.path)
         if draft:
             self.lyrics.setPlainText(draft['lyrics'])
@@ -574,15 +603,30 @@ class Window(QMainWindow):
             t = self.edited_track()
         except ValueError as e:
             return self.error(str(e))
-        def done(rows):
+        source = self.lyrics_provider.currentData()
+        refresh = self.refresh_lyrics.isChecked()
+        def update(result):
+            rows = result.rows
             self.candidates.blockSignals(True)
             self.candidates.clear()
             self.candidates.addItem(f'{len(rows)} 个候选 · 请核对歌手、时长和版本后选择')
             for r in rows:
-                self.candidates.addItem(f"{r['match']}% · {r.get('artistName')} — {r.get('trackName')} / {r.get('albumName')} · {r.get('duration')}s" + (' · 纯音乐' if r.get('instrumental') else ''), r)
+                self.candidates.addItem(f"[{r['sourceLabel']}] {r['match']}% · {r.get('artistName')} — {r.get('trackName')} / {r.get('albumName') or '未提供专辑'} · {r.get('duration', 0):.0f}s" + (' · 纯音乐' if r.get('instrumental') else ''), r)
             self.candidates.blockSignals(False)
-            self.status.setText('歌词搜索完成 · 相似度仅供参考，请手动选择匹配版本')
-        self.job('正在查询 LRCLIB…', lambda: find_lyrics(t), done)
+            self.provider_status.setText('  |  '.join(s['label'] + '：' + s['message'] for s in result.statuses))
+            self.provider_status.setTextFormat(Qt.TextFormat.PlainText)
+        def done(result):
+            update(result)
+            self.history.append('歌词查询：' + self.provider_status.text())
+            if result.rows:
+                self.status.setText(f'已找到 {len(result.rows)} 个候选 · 选择版本获取歌词；其他来源的故障不影响使用')
+            elif any(s['ok'] for s in result.statuses):
+                self.status.setText('可连接的来源未找到匹配 · 可简化曲名、移除歌手别名或切换来源后重试')
+            else:
+                self.status.setText('本次各来源均未连接成功 · 详情见来源状态，可切换网络或稍后重试；原歌词已保留')
+        self.provider_status.setText('正在查询… 国内来源和 LRCLIB 独立运行，已完成结果会先显示。')
+        self.job('正在多源搜索歌词…', lambda progress: search_online_lyrics(t, source, progress, refresh),
+                 done, with_progress=True, on_progress=update)
 
     def choose_lyrics(self, index):
         r = self.candidates.currentData()
@@ -591,8 +635,27 @@ class Window(QMainWindow):
         if r.get('instrumental'):
             self.lyrics_source.setText('此候选标记为纯音乐，未修改当前歌词。')
             return
-        self.lyrics.setPlainText(r.get('syncedLyrics') or r.get('plainLyrics') or '')
-        self.lyrics_source.setText(f'来源：<a href="https://lrclib.net/api/get/{r["id"]}">LRCLIB #{r["id"]}</a> · 请校对版本及时间轴')
+        include_translation = self.include_translation.isChecked()
+        refresh = self.refresh_lyrics.isChecked()
+        def done(payload):
+            text = merge_lrc(payload.text, payload.translation) if include_translation else payload.text
+            self.lyrics.setPlainText(text)
+            if payload.romaji:
+                self.romaji.setPlainText(merge_lrc(text, payload.romaji))
+            suffix = ' · 来源提供罗马音，可继续校对' if payload.romaji else ' · 可离线生成日语罗马音'
+            if payload.stale:
+                suffix += ' · 网络不可用，使用历史缓存'
+            elif payload.cached:
+                suffix += ' · 来自缓存'
+            self.lyrics_source.setText(f'来源：<a href="{html.escape(r["sourceUrl"], quote=True)}">{html.escape(r["sourceLabel"])} #{html.escape(str(r["id"]))}</a>' + suffix)
+            self.status.setText('歌词已获取 · 请核对版本及时间轴，尚未修改音乐文件')
+        def failed(message):
+            self.lyrics_source.setText('本候选获取失败：' + message + '。原歌词已保留，请选择其他候选或来源。')
+            self.lyrics_source.setTextFormat(Qt.TextFormat.PlainText)
+            self.status.setText('此候选暂不可用 · 可直接选择其他来源结果')
+            self.history.append(r['sourceLabel'] + ' 获取歌词失败：' + message)
+        self.lyrics_source.setTextFormat(Qt.TextFormat.AutoText)
+        self.job('正在从' + r['sourceLabel'] + '获取歌词…', lambda: fetch_lyrics(r, refresh), done, on_error=failed)
 
     def invalidate_romaji(self):
         self.romaji.clear()
@@ -772,7 +835,7 @@ class Window(QMainWindow):
 
     def about(self):
         QMessageBox.information(self, '关于 Mio',
-            'Mio 音乐修复室 1.0\n\n'
+            f'Mio 音乐修复室 {__version__}\n\n'
             '1. 导入音乐，点击分析查看抽样频谱。\n'
             '2. 核对搜索曲名、歌手，选择歌词版本；日语可离线生成罗马音。\n'
             '3. 输入专辑，选择发行版并预览封面，或选择本地图片。\n'

@@ -41,3 +41,55 @@ def test_background_job_completes_on_ui_thread():
     assert result == [(42, True)]
     assert not w.busy
     w.close()
+
+
+def wait_for_job(w):
+    from PySide6.QtCore import QEventLoop, QTimer
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.timeout.connect(lambda: loop.quit() if not w.busy else None)
+    timer.start(10)
+    QTimer.singleShot(3000, loop.quit)
+    loop.exec()
+    timer.stop()
+    assert not w.busy
+
+
+def test_lyrics_outage_is_inline_and_preserves_editor(monkeypatch):
+    from mio import ui
+    from mio.lyrics import SearchResult
+    app = QApplication.instance() or QApplication([])
+    w = Window()
+    w.tracks = [Track('C:/one.flac', 'One')]
+    w.list.addItem('One')
+    w.list.setCurrentRow(0)
+    w.lyrics.setPlainText('my unsaved lyrics')
+    monkeypatch.setattr(ui, 'search_online_lyrics', lambda *a: SearchResult([], [
+        {'source': 'lrclib', 'label': 'LRCLIB', 'ok': False, 'count': 0, 'message': 'HTTP 503'}]))
+    monkeypatch.setattr(ui.QMessageBox, 'warning', lambda *a: (_ for _ in ()).throw(AssertionError('modal error')))
+    w.search_lyrics()
+    wait_for_job(w)
+    assert '503' in w.provider_status.text()
+    assert '均未连接成功' in w.status.text()
+    assert w.lyrics.toPlainText() == 'my unsaved lyrics'
+    w.close()
+
+
+def test_candidate_fetch_failure_preserves_editor_and_other_choices(monkeypatch):
+    from mio import ui
+    app = QApplication.instance() or QApplication([])
+    w = Window()
+    w.tracks = [Track('C:/one.flac', 'One')]
+    w.list.addItem('One')
+    w.list.setCurrentRow(0)
+    w.lyrics.setPlainText('old lyrics')
+    def fail(*args): raise ValueError('HTTP 503')
+    monkeypatch.setattr(ui, 'fetch_lyrics', fail)
+    monkeypatch.setattr(ui.QMessageBox, 'warning', lambda *a: (_ for _ in ()).throw(AssertionError('modal error')))
+    w.candidates.addItem('网易云', {'sourceLabel': '网易云音乐', 'source': 'netease', 'id': '1'})
+    w.candidates.setCurrentIndex(1)
+    wait_for_job(w)
+    assert w.lyrics.toPlainText() == 'old lyrics'
+    assert '503' in w.lyrics_source.text()
+    assert w.candidates.count() == 2
+    w.close()

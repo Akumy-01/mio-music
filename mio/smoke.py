@@ -6,6 +6,32 @@ import tempfile
 import traceback
 
 
+def run_lyrics(output_path):
+    """Live test of the executable's HTTP/TLS and provider parsing; not a CI dependency."""
+    report = {'ok': False}
+    try:
+        from .core import Track
+        from .lyrics import search_lyrics, fetch_lyrics
+        from . import __version__
+        result = search_lyrics(Track('', 'Lemon', '米津玄師', duration=255), refresh=True)
+        fetches = []
+        for source in ('netease', 'kugou', 'lrclib'):
+            row = next((r for r in result.rows if r['source'] == source and not r.get('instrumental')), None)
+            if row:
+                try:
+                    p = fetch_lyrics(row, refresh=True)
+                    fetches.append({'source': source, 'ok': bool(p.text), 'characters': len(p.text),
+                                    'romaji_characters': len(p.romaji), 'stale': p.stale})
+                except Exception as e:
+                    fetches.append({'source': source, 'ok': False, 'error': str(e)})
+        report = {'ok': any(f['ok'] for f in fetches), 'version': __version__,
+                  'statuses': result.statuses, 'fetches': fetches}
+    except Exception:
+        report['error'] = traceback.format_exc()
+    Path(output_path).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    return 0 if report['ok'] else 1
+
+
 def run(output_path):
     result = {'ok': False}
     try:

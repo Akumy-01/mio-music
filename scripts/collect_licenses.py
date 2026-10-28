@@ -6,7 +6,7 @@ import subprocess
 import sys
 import imageio_ffmpeg
 
-target = Path(__file__).resolve().parents[1] / 'dist' / 'MioMusic' / 'licenses'
+target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / 'dist' / 'MioMusic' / 'licenses'
 target.mkdir(parents=True, exist_ok=True)
 for dist in metadata.distributions():
     name = dist.metadata.get('Name', 'unknown')

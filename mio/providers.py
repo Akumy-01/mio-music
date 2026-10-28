@@ -56,20 +56,8 @@ def similarity(a, b):
 
 
 def find_lyrics(track: Track):
-    params = {'track_name': track.title}
-    if track.artist:
-        params['artist_name'] = track.artist
-    data = get_json('https://lrclib.net/api/search', params)
-    result = []
-    for row in data:
-        if not (row.get('plainLyrics') or row.get('syncedLyrics') or row.get('instrumental')):
-            continue
-        title_score = similarity(track.title, row.get('trackName', ''))
-        artist_score = similarity(track.artist, row.get('artistName', '')) if track.artist else 0.5
-        duration_score = max(0, 1 - abs(track.duration - row.get('duration', 0)) / 20)
-        row['match'] = round(100 * (.5 * title_score + .3 * artist_score + .2 * duration_score))
-        result.append(row)
-    return sorted(result, key=lambda x: x['match'], reverse=True)[:12]
+    from .lyrics import search_lyrics
+    return search_lyrics(track).rows
 
 
 def quote_query(value):

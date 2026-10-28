@@ -27,6 +27,12 @@ The portable distribution retains license files from imageio-ffmpeg and includes
 
 ## Network content
 
+NetEase Cloud Music: https://music.163.com/
+
+KuGou Music: https://www.kugou.com/
+
+Provider protocol references inspected during implementation: https://github.com/Ferry-200/music_api_dart (NetEase lyric fields and KuGou lyrics search/download); https://github.com/Ferry-200/coriander_player . Mio's Python adapters use public line-synced text responses and do not reuse the QRC/KRC decryption implementations or retrieve audio.
+
 LRCLIB: https://lrclib.net/docs
 
 MusicBrainz: https://musicbrainz.org/doc/About/Data_License
