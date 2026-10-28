@@ -1,0 +1,44 @@
+name: Test and build Windows
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - run: python -m venv .venv
+      - run: .venv/Scripts/python -m pip install -r requirements-lock.txt
+      - run: .venv/Scripts/python -m pytest -q
+      - run: ./scripts/build.ps1
+        shell: pwsh
+      - name: Smoke test the packaged executable
+        shell: pwsh
+        run: |
+          $report = Join-Path (Get-Location) 'build/packaged-smoke.json'
+          $process = Start-Process -FilePath 'dist/MioMusic/MioMusic.exe' -ArgumentList @('--smoke-test', $report) -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw 'Packaged smoke test failed' }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not $result.ok) { throw 'Packaged smoke test failed' }
+          Get-Content $report
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MioMusic-windows-x64
+          path: dist/MioMusic/
+      - if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: Compress-Archive -Path dist/MioMusic -DestinationPath dist/MioMusic-windows-x64.zip
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MioMusic-windows-x64.zip
+          generate_release_notes: true
+    permissions:
+      contents: write
