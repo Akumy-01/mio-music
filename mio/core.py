@@ -167,6 +167,9 @@ def image_bytes(data: bytes) -> bytes:
         raise ValueError('封面超过 12 MB')
     with Image.open(BytesIO(data)) as im:
         im.load()
+        # Already suitable JPEGs stay byte-identical; repeated saves must not recompress them.
+        if im.format == 'JPEG' and im.mode == 'RGB' and max(im.size) <= 1600 and not im.getexif():
+            return data
         im = im.convert('RGB')
         im.thumbnail((1600, 1600))
         output = BytesIO()

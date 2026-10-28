@@ -122,6 +122,8 @@ def test_helpers():
     assert similarity('Hello World!', 'hello world') == 1
     assert quote_query('a" OR release:*') == '"a  OR release  "'
     assert image_bytes(cover()).startswith(b'\xff\xd8')
+    normalized = image_bytes(cover())
+    assert image_bytes(normalized) == normalized
 
 
 @pytest.mark.parametrize('ext,codec', [('.flac', 'flac'), ('.mp3', 'libmp3lame'), ('.m4a', 'alac')])

@@ -421,6 +421,7 @@ class Window(QMainWindow):
         t = self.current()
         if not t:
             return
+        data = image_bytes(data)
         key = 'cover-' + hashlib.sha256(data).hexdigest()[:16]
         rows = self.cover_versions.setdefault(t.path, [])
         if not any(r['key'] == key for r in rows):
