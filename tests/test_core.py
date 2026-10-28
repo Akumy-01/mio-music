@@ -35,7 +35,7 @@ def cover(color='green'):
 
 
 @pytest.mark.parametrize('ext,codec', [('.flac', 'flac'), ('.mp3', 'libmp3lame'),
-                                      ('.m4a', 'alac')])
+                                      ('.m4a', 'alac'), ('.m4a', 'aac')])
 def test_roundtrip_preserves_audio_and_restores(music, ext, codec):
     _, make = music
     p = make(ext, codec)
@@ -47,6 +47,8 @@ def test_roundtrip_preserves_audio_and_restores(music, ext, codec):
     updated = read_track(str(p))
     assert updated.lyrics == lyric
     assert updated.cover
+    if codec == 'aac':
+        assert analyze(updated).verdict == '有损编码'
     assert digest(record['backup']) == before
     np.testing.assert_array_equal(pcm, decode_segment(str(p), 0, 4, t.sample_rate))
     old_cover = updated.cover
@@ -108,11 +110,12 @@ def test_suspected_lowpass(tmp_path):
 
 
 def test_romaji_timestamps_and_non_japanese():
-    r = romanize('[00:01.20]こんにちは\nEnglish text\n[ar:Artist]')
+    r = romanize('[00:01.20]こんにちは\nEnglish text\n[ar:Artist]\n音楽')
     assert r.count('[00:01.20]') == 2
     assert 'konnichiha' in r
     assert r.count('English text') == 1
     assert '[ar:Artist]' in r
+    assert 'ongaku' in r
 
 
 def test_helpers():

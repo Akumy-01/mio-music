@@ -4,7 +4,7 @@
 
 ## 自动化
 
-`python -m pytest -q`：14 项通过。
+`python -m pytest -q`：15 项通过。
 
 - 对真实 FFmpeg 生成的 FLAC、MP3、ALAC M4A 进行标签写入、读取、已有封面保留、撤销恢复。
 - 对写入前后 FFmpeg 解码 float32 样本使用逐点相等断言。
@@ -15,6 +15,8 @@
 - Qt 切换歌曲保留草稿，以及后台任务完成后在 GUI 主线程回调。
 
 源码与最终可执行程序另有 `--smoke-test <report.json>` 检查：FFmpeg 解码、SciPy STFT、离线日语词典、FLAC 写入、备份恢复和原生 Qt 窗口渲染。构建流水线在每次打包后执行此检查。
+
+最终 EXE 的上述六项检查均通过。打包过程中发现开发环境 PATH 中其他工具自带的 ICU DLL 会被误收集，导致 Qt 独立运行失败；构建脚本已隔离 PATH，使用 Windows 系统运行库并重新验证。
 
 ## 在线接口
 
