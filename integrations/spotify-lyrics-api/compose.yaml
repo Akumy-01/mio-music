@@ -1,0 +1,16 @@
+services:
+  lyrics:
+    build: .
+    container_name: mio-spotify-lyrics
+    ports:
+      - "127.0.0.1:8765:8080"
+    environment:
+      SP_DC: ${SP_DC:?Please run scripts/start-spotify.ps1}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

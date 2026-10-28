@@ -5,22 +5,25 @@ from pathlib import Path
 import sys
 import traceback
 import html
+import hashlib
 from dataclasses import replace
 
 import numpy as np
 from PySide6.QtCore import (Qt, QObject, Signal, QRunnable, QThreadPool, QUrl,
-                            QPropertyAnimation, QEasingCurve, QTimer)
+                            QPropertyAnimation, QEasingCurve, QTimer, QSettings)
 from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QPainter, QPen, QPixmap, QDesktopServices)
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QFileDialog, QTabWidget,
     QLineEdit, QTextEdit, QComboBox, QCheckBox, QMessageBox, QProgressBar, QFrame,
-    QGraphicsOpacityEffect, QSplitter, QScrollArea)
+    QGraphicsOpacityEffect, QSplitter, QScrollArea, QDialog, QDialogButtonBox)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from .core import (Track, Analysis, read_track, analyze, romanize, write_tags, restore,
                    SUPPORTED, WRITABLE, image_bytes)
 from .providers import find_covers, download_cover
 from .lyrics import search_lyrics as search_online_lyrics, fetch_lyrics, merge_lrc, PROVIDERS
 from . import __version__
+from .write_panel import WritePanel
+from .spotify import endpoint_url, track_id
 
 STYLE = '''
 QWidget { background:#f5f5f1; color:#24372f; font-family:"Microsoft YaHei UI"; font-size:13px; }
@@ -160,14 +163,13 @@ class Window(QMainWindow):
         self.last_record = None
         self.drafts = {}
         self.selected_path = None
+        self._selecting = False
+        self.lyric_versions = {}
+        self.cover_versions = {}
+        self.operation_records = []
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
-        self.player = QMediaPlayer(self)
-        self.output = QAudioOutput(self)
-        self.output.setVolume(.6)
-        self.player.setAudioOutput(self.output)
-        self.player.errorOccurred.connect(lambda e, msg: self.statusBar().showMessage('试听不可用：' + msg))
-        self.player.playbackStateChanged.connect(lambda state: self.play.setText('暂停试听' if state == QMediaPlayer.PlaybackState.PlayingState else '▷ 试听'))
+        self.init_player()
         root = QWidget()
         self.setCentralWidget(root)
         outer = QHBoxLayout(root)
@@ -205,8 +207,10 @@ class Window(QMainWindow):
         top.addStretch()
         top.addWidget(label(f'●  本地优先   /   v{__version__}', 'muted'))
         layout.addLayout(top)
-        layout.addWidget(label('让每一首歌，完整如初。', 'heading'))
-        layout.addWidget(label('看见音质 · 找回歌词 · 补全封面', 'muted'))
+        self.headline = label('让每一首歌，完整如初。', 'heading')
+        self.tagline = label('看见音质 · 找回歌词 · 补全封面', 'muted')
+        layout.addWidget(self.headline)
+        layout.addWidget(self.tagline)
 
         card = QFrame()
         card.setObjectName('card')
@@ -316,11 +320,14 @@ class Window(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(button('导入 LRC', self.load_lrc))
         row.addWidget(button('导出当前歌词', self.export_lrc))
+        row.addWidget(button('Spotify 链接…', self.spotify_dialog))
         row.addStretch()
         self.roma_btn = button('生成日语罗马音', self.make_romaji)
         row.addWidget(self.roma_btn)
         box.addLayout(row)
         self.lyrics.textChanged.connect(self.invalidate_romaji)
+        self.lyrics.textChanged.connect(self.refresh_write_panel)
+        self.romaji.textChanged.connect(self.refresh_write_panel)
         return page
 
     def cover_page(self):
@@ -344,7 +351,7 @@ class Window(QMainWindow):
         self.cover_preview.setStyleSheet('background:#e5eadf;border-radius:14px;font-size:64px;color:#8a9b80;')
         row.addWidget(self.cover_preview)
         info = QVBoxLayout()
-        self.cover_info = label('先确认专辑和发行版本，再预览封面。\n已有内嵌封面会保留。')
+        self.cover_info = label('先确认发行版本并预览；在写入页选择保留、补全或替换。')
         self.cover_info.setOpenExternalLinks(True)
         info.addWidget(self.cover_info)
         self.download_btn = button('预览所选发行版封面', self.fetch_cover)
@@ -358,32 +365,105 @@ class Window(QMainWindow):
         return page
 
     def history_page(self):
-        page = QWidget()
-        box = QVBoxLayout(page)
-        box.setContentsMargins(0, 14, 0, 0)
-        box.addWidget(label('每一次整理，都可以安心回溯。'))
-        self.write_lyrics = QCheckBox('嵌入当前原文歌词（会替换已有歌词）')
-        self.write_lyrics.setChecked(True)
-        self.write_romaji = QCheckBox('同时保存罗马音到独立自定义标签（保留原文歌词）')
-        self.write_romaji.setChecked(True)
-        self.write_cover = QCheckBox('补全缺失封面（保留已有封面）')
-        self.write_cover.setChecked(True)
-        for w in (self.write_lyrics, self.write_romaji, self.write_cover):
-            box.addWidget(w)
-        box.addWidget(label('先预览歌词与封面，再保存。程序会校验临时文件、建立 SHA-256 备份后原子替换原件，不重新编码音频。WAV / OGG / OPUS / AIFF 暂只分析，可导出歌词。', 'muted'))
-        row = QHBoxLayout()
-        self.save_btn = button('嵌入并保存', self.save, True)
-        self.undo_btn = button('撤销最近一次写入', self.undo)
-        row.addWidget(self.save_btn)
-        row.addWidget(self.undo_btn)
-        row.addWidget(button('打开备份目录', self.open_backups))
-        row.addWidget(button('查看持久记录', self.load_history))
-        box.addLayout(row)
-        self.history = QTextEdit()
-        self.history.setReadOnly(True)
-        self.history.setPlaceholderText('写入日志与来源将显示在这里。\n持久记录保存在音乐目录的 .mio/history.jsonl。')
-        box.addWidget(self.history, 1)
-        return page
+        self.write_panel = WritePanel()
+        self.write_panel.saveRequested.connect(self.save)
+        self.write_panel.undoRequested.connect(self.undo)
+        self.write_panel.backupsRequested.connect(self.open_backups)
+        self.write_panel.reloadRequested.connect(self.load_history)
+        self.save_btn = self.write_panel.save_button
+        self.undo_btn = self.write_panel.undo_button
+        self.history = self.write_panel.diagnostics
+        return self.write_panel
+
+    def init_player(self):
+        self.player = QMediaPlayer(self)
+        self.output = QAudioOutput(self)
+        self.output.setVolume(.6)
+        self.player.setAudioOutput(self.output)
+        self.player.errorOccurred.connect(lambda e, msg: self.statusBar().showMessage('试听不可用：' + msg))
+        self.player.playbackStateChanged.connect(lambda state: self.play.setText('暂停试听' if state == QMediaPlayer.PlaybackState.PlayingState else '▷ 试听') if hasattr(self, 'play') else None)
+
+    def release_player(self):
+        # Qt source changes are asynchronous; destroy the decoder to close Windows file handles.
+        import shiboken6
+        self.player.stop()
+        self.player.setSource(QUrl())
+        self.player.setAudioOutput(None)
+        shiboken6.delete(self.player)
+        shiboken6.delete(self.output)
+        self.init_player()
+        self.play.setText('▷ 试听')
+
+    def refresh_write_panel(self):
+        if self._selecting or not hasattr(self, 'write_panel'):
+            return
+        t = self.current()
+        if not t:
+            self.write_panel.set_content(None, [], [], '')
+            return
+        options = [{'key': 'editor', 'label': '当前编辑区 · 原文 / 译文', 'text': self.lyrics.toPlainText(), 'source': self.lyrics_source.text()},
+                   {'key': 'preview', 'label': '当前罗马音预览 · 原文＋罗马音', 'text': self.romaji.toPlainText(), 'source': '罗马音预览'}]
+        options.extend(self.lyric_versions.get(t.path, []))
+        self.write_panel.set_content(t, options, self.cover_versions.get(t.path, []), self.romaji.toPlainText())
+
+    def remember_lyric(self, title, text, source):
+        t = self.current()
+        if not t:
+            return
+        key = 'lyric-' + hashlib.sha256((source+text).encode()).hexdigest()[:16]
+        rows = self.lyric_versions.setdefault(t.path, [])
+        if not any(r['key'] == key for r in rows):
+            rows.append({'key': key, 'label': title, 'text': text, 'source': source})
+        self.refresh_write_panel()
+        self.write_panel.select_lyrics(key)
+
+    def remember_cover(self, title, data, source):
+        t = self.current()
+        if not t:
+            return
+        key = 'cover-' + hashlib.sha256(data).hexdigest()[:16]
+        rows = self.cover_versions.setdefault(t.path, [])
+        if not any(r['key'] == key for r in rows):
+            rows.append({'key': key, 'label': title, 'data': data, 'source': source})
+        self.refresh_write_panel()
+        self.write_panel.select_cover(key)
+
+    def spotify_dialog(self):
+        settings = QSettings('MioMusic', 'MioMusic')
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Spotify 歌词 · spotify-lyrics-api')
+        dialog.resize(620, 310)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label('连接你自己的歌词服务，粘贴 Spotify 歌曲链接获取。'))
+        layout.addWidget(label('服务地址', 'muted'))
+        endpoint = QLineEdit(settings.value('spotify/endpoint', 'http://127.0.0.1:8765/'))
+        layout.addWidget(endpoint)
+        song = QLineEdit()
+        song.setPlaceholderText('https://open.spotify.com/track/… 或 Track ID')
+        layout.addWidget(song)
+        layout.addWidget(label('SP_DC 登录会话只配置在你自己的服务端。本窗口不读取浏览器 Cookie，也不向公共代理提交登录凭据。', 'muted'))
+        notice = label('未配置服务时，请先按部署说明启动 spotify-lyrics-api。', 'muted')
+        notice.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(notice)
+        layout.addWidget(button('查看本地服务部署说明', lambda: QDesktopServices.openUrl(QUrl('https://github.com/Akumy-01/mio-music/blob/main/docs/SPOTIFY.md'))))
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        controls.button(QDialogButtonBox.StandardButton.Ok).setText('获取并预览')
+        controls.rejected.connect(dialog.reject)
+        result = {}
+        def validate():
+            try:
+                result['endpoint'] = endpoint_url(endpoint.text())
+                result['id'] = track_id(song.text())
+                dialog.accept()
+            except ValueError as e:
+                notice.setText(str(e))
+        controls.accepted.connect(validate)
+        layout.addWidget(controls)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            settings.setValue('spotify/endpoint', result['endpoint'])
+            self.choose_lyrics(-1, {'source': 'spotify', 'sourceLabel': 'Spotify', 'id': result['id'],
+                'endpoint': result['endpoint'], 'sourceUrl': 'https://open.spotify.com/track/' + result['id'],
+                'trackName': self.current().title if self.current() else result['id']})
 
     def current(self):
         i = self.list.currentRow()
@@ -492,13 +572,15 @@ class Window(QMainWindow):
         self.select_track(self.list.currentRow())
 
     def select_track(self, index):
-        self.player.stop()
+        self.release_player()
         if self.selected_path:
             self.drafts[self.selected_path] = {
                 'lyrics': self.lyrics.toPlainText(), 'romaji': self.romaji.toPlainText(),
                 'title': self.title_edit.text(), 'artist': self.artist_edit.text(),
                 'album': self.album_edit.text(), 'cover': self.pending_cover,
-                'source': self.lyrics_source.text(), 'cover_info': self.cover_info.text()}
+                'source': self.lyrics_source.text(), 'cover_info': self.cover_info.text(),
+                'write_state': self.write_panel.state()}
+        self._selecting = True
         self.pending_cover = None
         self.candidates.blockSignals(True)
         self.candidates.clear()
@@ -515,6 +597,9 @@ class Window(QMainWindow):
             self.track_sub.setText('拖放音频或文件夹到这里，开始整理你的收藏。')
             self.tech.setText('FLAC / MP3 / M4A / WAV / OGG / OPUS / AIFF')
             self.show_art(self.art, b'')
+            self._selecting = False
+            self.refresh_write_panel()
+            self.write_panel.set_records([])
             return
         self.track_title.setText(t.title)
         self.track_sub.setText(f'{t.artist or "未知歌手"}  /  {t.album or "未知专辑"}')
@@ -525,10 +610,10 @@ class Window(QMainWindow):
         self.artist_edit.setText(t.artist)
         self.album_edit.setText(t.album)
         self.lyrics.setPlainText(t.lyrics)
-        self.romaji.clear()
+        self.romaji.setPlainText(t.romaji)
         self.show_art(self.art, t.cover)
         self.show_art(self.cover_preview, t.cover)
-        self.cover_info.setText('已有内嵌封面 · 自动保留' if t.cover else '尚无内嵌封面 · 可在线匹配或选择本地图片')
+        self.cover_info.setText('已有内嵌封面 · 可在写入页明确选择替换' if t.cover else '尚无内嵌封面 · 可在线匹配或选择本地图片')
         self.lyrics_source.setText('当前来自本地文件' if t.lyrics else '尚无歌词 · 可以联网匹配或导入本地歌词')
         self.lyrics_source.setTextFormat(Qt.TextFormat.AutoText)
         draft = self.drafts.get(t.path)
@@ -543,9 +628,11 @@ class Window(QMainWindow):
             self.cover_info.setText(draft['cover_info'])
             self.show_art(self.cover_preview, self.pending_cover or t.cover)
         self.show_analysis(self.analyses.get(t.path))
-        self.player.setSource(QUrl.fromLocalFile(t.path))
-        self.save_btn.setEnabled(Path(t.path).suffix.lower() in WRITABLE)
-        self.undo_btn.setEnabled(self.last_record is not None)
+        self._selecting = False
+        self.refresh_write_panel()
+        if draft:
+            self.write_panel.restore_state(draft.get('write_state', {}))
+        self.load_history()
         self.animate_page()
 
     def show_art(self, widget, data):
@@ -628,8 +715,8 @@ class Window(QMainWindow):
         self.job('正在多源搜索歌词…', lambda progress: search_online_lyrics(t, source, progress, refresh),
                  done, with_progress=True, on_progress=update)
 
-    def choose_lyrics(self, index):
-        r = self.candidates.currentData()
+    def choose_lyrics(self, index, row=None):
+        r = row or self.candidates.currentData()
         if not r:
             return
         if r.get('instrumental'):
@@ -648,6 +735,10 @@ class Window(QMainWindow):
             elif payload.cached:
                 suffix += ' · 来自缓存'
             self.lyrics_source.setText(f'来源：<a href="{html.escape(r["sourceUrl"], quote=True)}">{html.escape(r["sourceLabel"])} #{html.escape(str(r["id"]))}</a>' + suffix)
+            title = r['sourceLabel'] + ' · ' + ' / '.join(x for x in [r.get('trackName'), r.get('artistName'), r.get('albumName')] if x) + ' #' + str(r['id'])
+            self.remember_lyric(title + ' · 原文', payload.text, r['sourceUrl'])
+            if text != payload.text:
+                self.remember_lyric(title + ' · 原文＋译文', text, r['sourceUrl'])
             self.status.setText('歌词已获取 · 请核对版本及时间轴，尚未修改音乐文件')
         def failed(message):
             self.lyrics_source.setText('本候选获取失败：' + message + '。原歌词已保留，请选择其他候选或来源。')
@@ -687,7 +778,8 @@ class Window(QMainWindow):
         def done(data):
             self.pending_cover = data
             self.show_art(self.cover_preview, data)
-            self.cover_info.setText(f'待写入封面 · {len(data)//1024} KB<br><a href="{r["url"]}">查看 MusicBrainz 发行版与来源</a><br>若已有封面，写入时仍会保留原封面。')
+            self.cover_info.setText(f'待选封面 · {len(data)//1024} KB<br><a href="{r["url"]}">查看 MusicBrainz 发行版与来源</a><br>在写入页选择保留、补全或替换。')
+            self.remember_cover(r['title'] + ' · ' + r['date'], data, r['url'])
             self.status.setText('封面已准备 · 尚未修改音乐文件')
         self.job('正在从 Cover Art Archive 下载封面…', lambda: download_cover(r['id']), done)
 
@@ -700,6 +792,7 @@ class Window(QMainWindow):
                 self.pending_cover = image_bytes(Path(path).read_bytes())
                 self.show_art(self.cover_preview, self.pending_cover)
                 self.cover_info.setText('待写入本地封面：' + Path(path).name)
+                self.remember_cover('本地 · ' + Path(path).name, self.pending_cover, '本地图片：' + Path(path).name)
             except Exception as e:
                 self.error(str(e))
 
@@ -710,6 +803,7 @@ class Window(QMainWindow):
                 text = Path(path).read_text(encoding='utf-8-sig')
                 self.lyrics.setPlainText(text)
                 self.lyrics_source.setText('本地导入：' + Path(path).name)
+                self.remember_lyric('本地 · ' + Path(path).name, text, '本地歌词：' + Path(path).name)
             except Exception as e:
                 self.error('请使用 UTF-8 编码歌词：' + str(e))
 
@@ -731,52 +825,79 @@ class Window(QMainWindow):
         t = self.current()
         if not t:
             return
-        lyrics = self.lyrics.toPlainText() if self.write_lyrics.isChecked() else None
-        cover = self.pending_cover if self.write_cover.isChecked() and not t.cover else None
-        roma = self.romaji.toPlainText() if self.write_romaji.isChecked() else ''
-        provenance = {'lyrics': self.lyrics_source.text() if lyrics is not None else '',
-                      'cover': self.cover_info.text() if cover else ''}
-        if lyrics is not None and not lyrics.strip():
-            return self.error('当前歌词为空。为避免清空已有歌词，请取消歌词嵌入选项或先填写歌词。')
-        if lyrics is None and cover is None:
-            return self.error('没有待写入内容：请准备歌词或缺失封面')
-        self.player.stop()
-        self.player.setSource(QUrl())
+        try:
+            plan = self.write_panel.plan()
+        except ValueError as e:
+            self.status.setText(str(e))
+            return
+        output = None
+        if plan.copy:
+            default = str(Path(t.path).with_name(Path(t.path).stem + '.mio' + Path(t.path).suffix))
+            output, _ = QFileDialog.getSaveFileName(self, '另存整理副本（请选择新文件名）', default,
+                '音乐 (*' + Path(t.path).suffix + ')')
+            if not output:
+                return
+            if Path(output).exists():
+                self.status.setText('另存副本不能覆盖已有文件，请选择新文件名。')
+                return
+        self.release_player()
         index = self.list.currentRow()
         def done(record):
             self.last_record = record
-            self.drafts.pop(t.path, None)
-            self.selected_path = None
-            self.tracks[index] = read_track(t.path)
-            self.select_track(index)
-            self.history.append(f"✓ {record['time']}  {Path(t.path).name}\n备份：{record['backup']}\nSHA-256：{record['after_sha256']}")
+            self.operation_records.append(record)
+            if record.get('action') != 'copy':
+                self.drafts.pop(t.path, None)
+                self.selected_path = None
+                self.tracks[index] = read_track(t.path)
+                self.select_track(index)
+            self.load_history()
             if record.get('warning'):
                 self.history.append(record['warning'])
-            self.status.setText('已安全嵌入 · 原文件备份完成，可撤销最近一次写入')
-        self.job('正在验证、备份并安全嵌入标签…', lambda: write_tags(t, lyrics, cover, roma, provenance), done)
+            self.status.setText(('已另存整理副本：' + record['path']) if record.get('action') == 'copy' else '保存成功 · 已校验歌词与封面，原文件完整备份已保留')
+        def failed(message):
+            self.history.append('保存失败：' + message)
+            self.status.setText('保存未完成：' + message)
+            self.refresh_write_panel()
+        self.job('正在校验所选内容、备份并保存…',
+            lambda: write_tags(t, plan.lyrics, plan.cover, plan.romaji, plan.sources,
+                               replace_cover=plan.replace_cover, output_path=output), done, on_error=failed)
 
     def undo(self):
-        if not self.last_record:
-            return self.error('本次会话暂无可撤销的写入；历史备份可在 .mio/backups 手动找回')
-        record = self.last_record
-        self.player.stop()
-        self.player.setSource(QUrl())
+        record = self.write_panel.selected_record()
+        if not record:
+            self.status.setText('请先在文件保存记录中选中要撤销的一行。')
+            return
+        self.release_player()
         def done(_):
             self.last_record = None
+            self.operation_records = [r for r in self.operation_records if r.get('record_id', r.get('after_sha256')) != record.get('record_id', record['after_sha256'])]
+            log = Path(record.get('log_path', str(Path(record['path']).parent / '.mio/history.jsonl')))
+            try:
+                with log.open('a', encoding='utf-8') as f:
+                    f.write(json.dumps({'event': 'undo', 'undo_sha256': record['after_sha256'], 'record_id': record.get('record_id'),
+                                        'path': record['path']}, ensure_ascii=False) + '\n')
+            except OSError as e:
+                self.history.append('已撤销，但撤销记录保存失败：' + str(e))
             self.drafts.pop(record['path'], None)
-            self.selected_path = None
-            for i, t in enumerate(self.tracks):
-                if t.path == record['path']:
-                    self.tracks[i] = read_track(t.path)
-            self.select_track(self.list.currentRow())
-            self.history.append('已撤销：' + record['path'])
-            self.status.setText('原文件已从验证过的备份恢复')
-        self.job('正在验证备份并恢复…', lambda: restore(record), done)
+            if record.get('action') == 'copy':
+                self.load_history()
+            else:
+                self.selected_path = None
+                for i, t in enumerate(self.tracks):
+                    if t.path == record['path'] and Path(t.path).exists():
+                        self.tracks[i] = read_track(t.path)
+                self.select_track(self.list.currentRow())
+            self.status.setText('已撤销：' + ('整理副本已删除，原文件保持原样' if record.get('action') == 'copy' else '已恢复验证过的原文件备份'))
+        def failed(message):
+            self.history.append('撤销未完成：' + message)
+            self.status.setText('撤销未完成：' + message)
+        self.job('正在检查文件与备份并撤销所选操作…', lambda: restore(record), done, on_error=failed)
 
     def open_backups(self):
         t = self.current()
         if t:
-            path = Path(t.path).parent / '.mio'
+            record = self.write_panel.selected_record()
+            path = Path(record['backup']).parent if record else Path(t.path).parent / '.mio'
             if path.exists():
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
             else:
@@ -786,16 +907,33 @@ class Window(QMainWindow):
         t = self.current()
         if not t:
             return
-        path = Path(t.path).parent / '.mio' / 'history.jsonl'
-        if not path.exists():
-            self.status.setText('此音乐目录暂无写入记录')
-            return
-        try:
-            lines = path.read_text(encoding='utf-8').splitlines()[-200:]
-            self.history.setPlainText('\n\n'.join(json.dumps(json.loads(line), ensure_ascii=False, indent=2) for line in lines))
-            self.status.setText('已载入当前音乐目录最近 200 条写入记录')
-        except Exception as e:
-            self.error(str(e))
+        records = {}
+        undone = set()
+        paths = {Path(t.path).parent / '.mio' / 'history.jsonl'}
+        for r in self.operation_records:
+            if r.get('original_path', r.get('path')) == t.path and r.get('log_path'):
+                paths.add(Path(r['log_path']))
+        for path in paths:
+            if not path.exists():
+                continue
+            try:
+                for line in path.read_text(encoding='utf-8').splitlines()[-500:]:
+                    try:
+                        r = json.loads(line)
+                        if r.get('event') == 'undo':
+                            undone.add(r.get('record_id') or (r.get('path'), r.get('undo_sha256')))
+                        elif r.get('path') == t.path or r.get('original_path') == t.path:
+                            records[r.get('record_id') or (r.get('path'), r.get('after_sha256'))] = r
+                    except (ValueError, TypeError):
+                        continue
+            except OSError as e:
+                self.history.append('无法读取保存记录：' + str(e))
+        for r in self.operation_records:
+            if r.get('path') == t.path or r.get('original_path') == t.path:
+                records[r.get('record_id') or (r.get('path'), r.get('after_sha256'))] = r
+        rows = [r for k, r in records.items() if k not in undone]
+        rows.sort(key=lambda r: r.get('time', ''), reverse=True)
+        self.write_panel.set_records(rows[:200])
 
     def toggle_play(self):
         if not self.current():
@@ -803,9 +941,19 @@ class Window(QMainWindow):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         else:
+            if self.player.source().isEmpty():
+                self.player.setSource(QUrl.fromLocalFile(self.current().path))
             self.player.play()
 
     def animate_page(self, *_):
+        focused = self.tabs.currentIndex() == 3
+        self.headline.setVisible(not focused)
+        self.tagline.setVisible(not focused)
+        size = 72 if focused else 108
+        if self.art.width() != size:
+            self.art.setFixedSize(size, size)
+            t = self.current()
+            self.show_art(self.art, t.cover if t else b'')
         page = self.tabs.currentWidget()
         if not page:
             return

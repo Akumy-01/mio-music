@@ -6,6 +6,40 @@ on:
   pull_request:
   workflow_dispatch:
 jobs:
+  spotify-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build local Spotify service and lint PHP
+        run: |
+          docker build -t mio-spotify-test integrations/spotify-lyrics-api
+          docker run --rm --entrypoint php mio-spotify-test -l /app/src/Spotify.php
+          docker run --rm --entrypoint php mio-spotify-test -l /app/src/SpotifyException.php
+          docker run --rm --entrypoint php mio-spotify-test -l /app/api/index.php
+      - name: Verify unauthenticated protocol without any account credentials
+        run: |
+          docker run -d --name mio-spotify-test -p 127.0.0.1:8765:8080 mio-spotify-test
+          python - <<'PY'
+          import json, time, urllib.request, urllib.error
+          for attempt in range(20):
+              try:
+                  urllib.request.urlopen('http://127.0.0.1:8765/', timeout=2)
+              except urllib.error.HTTPError as e:
+                  assert e.code == 400
+                  assert json.load(e)['error'] is True
+                  break
+              except OSError:
+                  time.sleep(.25)
+          else:
+              raise RuntimeError('Service failed to start')
+          try:
+              urllib.request.urlopen('http://127.0.0.1:8765/?trackid=5f8eCNwTlr0RJopE9vQ6mB', timeout=3)
+          except urllib.error.HTTPError as e:
+              assert e.code == 500
+              assert json.load(e)['error'] is True
+          else:
+              raise RuntimeError('Missing credentials must not be treated as successful lyrics')
+          PY
   windows:
     runs-on: windows-latest
     steps:

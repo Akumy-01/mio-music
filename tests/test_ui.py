@@ -93,3 +93,26 @@ def test_candidate_fetch_failure_preserves_editor_and_other_choices(monkeypatch)
     assert '503' in w.lyrics_source.text()
     assert w.candidates.count() == 2
     w.close()
+
+
+def test_lazy_playback_released_before_real_write(tmp_path):
+    import subprocess, imageio_ffmpeg
+    from PySide6.QtTest import QTest
+    from mio.core import read_track, write_tags
+    path = tmp_path / "I'm still alive today.flac"
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-v', 'error', '-f', 'lavfi', '-i',
+        'sine=frequency=440:duration=1', str(path)], check=True, capture_output=True)
+    app = QApplication.instance() or QApplication([])
+    w = Window()
+    w.tracks = [read_track(str(path))]
+    w.list.addItem(path.name)
+    w.list.setCurrentRow(0)
+    assert w.player.source().isEmpty()
+    w.toggle_play()
+    QTest.qWait(180)
+    assert not w.player.source().isEmpty()
+    w.release_player()
+    assert w.player.source().isEmpty()
+    write_tags(w.current(), 'original test lyric', None)
+    assert read_track(str(path)).lyrics == 'original test lyric'
+    w.close()

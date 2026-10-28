@@ -122,3 +122,106 @@ def test_helpers():
     assert similarity('Hello World!', 'hello world') == 1
     assert quote_query('a" OR release:*') == '"a  OR release  "'
     assert image_bytes(cover()).startswith(b'\xff\xd8')
+
+
+@pytest.mark.parametrize('ext,codec', [('.flac', 'flac'), ('.mp3', 'libmp3lame'), ('.m4a', 'alac')])
+def test_independent_romaji_and_explicit_cover_replacement(music, ext, codec):
+    _, make = music
+    p = make(ext, codec)
+    write_tags(read_track(str(p)), 'original', cover(), 'romaji-original')
+    t = read_track(str(p))
+    original_cover = t.cover
+    write_tags(t, 'new lyrics', None)  # None preserves the independent custom tag.
+    assert read_track(str(p)).romaji == 'romaji-original'
+    write_tags(read_track(str(p)), None, cover('red'), 'new romaji', replace_cover=True)
+    result = read_track(str(p))
+    assert result.lyrics == 'new lyrics'
+    assert result.romaji == 'new romaji'
+    assert result.cover != original_cover
+
+
+def test_copy_does_not_touch_source_or_clobber_existing(music):
+    _, make = music
+    p = make('.flac', 'flac')
+    before = digest(p)
+    dst = p.with_name('organized.flac')
+    record = write_tags(read_track(str(p)), 'copy lyrics', None, output_path=str(dst))
+    assert digest(p) == before
+    assert read_track(str(dst)).lyrics == 'copy lyrics'
+    with pytest.raises(ValueError, match='不能覆盖'):
+        write_tags(read_track(str(p)), 'other', None, output_path=str(dst))
+    restore(record)
+    assert not dst.exists() and digest(p) == before
+
+
+def test_transient_lock_retried_and_external_modification_refused(monkeypatch, tmp_path):
+    from mio import core
+    src, stage = tmp_path/'src', tmp_path/'stage'
+    src.write_bytes(b'original')
+    stage.write_bytes(b'new')
+    original_replace = core.os.replace
+    calls = []
+    def transient(a, b):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError('locked')
+        original_replace(a, b)
+    monkeypatch.setattr(core.os, 'replace', transient)
+    monkeypatch.setattr(core.time, 'sleep', lambda _: None)
+    core.atomic_replace(stage, src, digest(src))
+    assert src.read_bytes() == b'new' and len(calls) == 3
+    stage.write_bytes(b'next')
+    with pytest.raises(ValueError, match='其他程序修改'):
+        core.atomic_replace(stage, src, 'wrong-hash')
+    assert src.read_bytes() == b'new'
+
+
+@pytest.mark.skipif(__import__('os').name != 'nt', reason='Windows handle sharing regression')
+def test_actual_windows_file_lock_preserves_original_and_allows_copy(music):
+    import ctypes
+    from ctypes import wintypes
+    _, make = music
+    p = make('.flac', 'flac')
+    t, before = read_track(str(p)), digest(p)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                 wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(p), 0x80000000, 1, None, 3, 0, None)
+    assert handle != ctypes.c_void_p(-1).value
+    try:
+        with pytest.raises(PermissionError, match='另存整理副本'):
+            write_tags(t, 'locked example', None)
+        assert digest(p) == before
+        dst = p.with_name('copy.flac')
+        write_tags(t, 'copy example', None, output_path=str(dst))
+        assert read_track(str(dst)).lyrics == 'copy example'
+        assert digest(p) == before
+    finally:
+        kernel.CloseHandle(handle)
+
+
+@pytest.mark.parametrize('ext,codec', [('.flac', 'flac'), ('.mp3', 'libmp3lame')])
+def test_replace_front_preserves_back_artwork(music, ext, codec):
+    import mutagen
+    from mutagen.flac import Picture
+    from mutagen.id3 import APIC
+    _, make = music
+    path = make(ext, codec)
+    audio = mutagen.File(path)
+    if audio.tags is None:
+        audio.add_tags()
+    back = cover('blue')
+    if ext == '.flac':
+        pic = Picture()
+        pic.type, pic.mime, pic.data = 4, 'image/png', back
+        audio.add_picture(pic)
+    else:
+        audio.tags.add(APIC(encoding=3, type=4, mime='image/png', desc='back', data=back))
+    audio.save()
+    write_tags(read_track(str(path)), None, cover('red'), replace_cover=True)
+    audio = mutagen.File(path)
+    pictures = audio.pictures if ext == '.flac' else audio.tags.getall('APIC')
+    assert sorted(p.type for p in pictures) == [3, 4]
+    assert next(p for p in pictures if p.type == 4).data == back

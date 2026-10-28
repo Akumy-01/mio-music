@@ -61,13 +61,60 @@ def run(output_path):
             app = QApplication.instance() or QApplication([])
             app.setStyleSheet(STYLE)
             w = Window()
+            w.tracks = [read_track(str(flac))]
+            w.list.addItem('smoke')
+            w.list.setCurrentRow(0)
+            assert w.player.source().isEmpty()
+            w.lyrics.setPlainText('[00:01.00]original smoke fixture')
+            w.write_panel.select_lyrics('editor')
+            assert w.write_panel.plan().lyrics == '[00:01.00]original smoke fixture'
+            from PySide6.QtCore import QEventLoop, QTimer
+            def finish_job():
+                loop = QEventLoop()
+                timer = QTimer()
+                timer.timeout.connect(lambda: loop.quit() if not w.busy else None)
+                timer.start(10)
+                QTimer.singleShot(10000, loop.quit)
+                loop.exec()
+                timer.stop()
+                assert not w.busy
+            w.save()
+            finish_job()
+            assert read_track(str(flac)).lyrics == '[00:01.00]original smoke fixture'
+            assert w.write_panel.selected_record()
+            w.undo()
+            finish_job()
+            assert digest(flac) == before
+            # Verify the packaged HTTP adapter, without any Spotify account credentials.
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            from threading import Thread
+            from .spotify import fetch_spotify
+            class Handler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'error': False, 'syncType': 'LINE_SYNCED',
+                        'lines': [{'timeTag': '00:01.00', 'words': 'original protocol fixture'}]}).encode())
+                def log_message(self, *args): pass
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                payload = fetch_spotify(f'http://127.0.0.1:{server.server_port}/', '5f8eCNwTlr0RJopE9vQ6mB')
+                assert payload.text == '[00:01.00]original protocol fixture'
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
             w.resize(1280, 880)
             w.show()
             app.processEvents()
             assert not w.grab().isNull()
             w.close()
             result = {'ok': True, 'checks': ['ffmpeg decode', 'scipy STFT', 'offline Japanese dictionary',
-                      'FLAC tags', 'backup and restore SHA-256', 'native Qt window render'],
+                      'FLAC tags', 'backup and restore SHA-256', 'native Qt window render',
+                      'GUI write plan / asynchronous save / selected-record undo',
+                      'Spotify HTTP protocol (local fixture, not live account)'],
                       'verdict': a.verdict}
     except Exception:
         result['error'] = traceback.format_exc()

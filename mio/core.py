@@ -8,6 +8,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import stat
+import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
@@ -39,6 +42,7 @@ class Track:
     channels: int = 0
     cover: bytes = field(default=b'', repr=False)
     lyrics: str = ''
+    romaji: str = ''
 
 
 def read_track(path: str) -> Track:
@@ -61,14 +65,18 @@ def read_track(path: str) -> Track:
         pics = sorted(audio.pictures, key=lambda x: x.type != 3)
         t.cover = pics[0].data if pics else b''
         t.lyrics = (audio.get('lyrics') or [''])[0]
+        t.romaji = (audio.get('MIO_ROMAJI') or [''])[0]
     elif isinstance(audio.tags, ID3):
-        pics = audio.tags.getall('APIC')
+        pics = sorted(audio.tags.getall('APIC'), key=lambda p: p.type != 3)
         t.cover = pics[0].data if pics else b''
         lyrics = audio.tags.getall('USLT')
         t.lyrics = lyrics[0].text if lyrics else ''
+        roma = audio.tags.getall('TXXX:MIO_ROMAJI')
+        t.romaji = str(roma[0].text[0]) if roma and roma[0].text else ''
     elif isinstance(audio, MP4):
         t.cover = bytes((audio.get('covr') or [b''])[0])
         t.lyrics = (audio.get('\xa9lyr') or [''])[0]
+        t.romaji = bytes((audio.get('----:com.mio:ROMAJI') or [b''])[0]).decode('utf-8', errors='replace')
     return t
 
 
@@ -174,29 +182,60 @@ def digest(path):
     return h.hexdigest()
 
 
-def write_tags(track: Track, lyrics: str | None, cover: bytes | None, romaji: str = '', provenance: dict | None = None) -> dict:
+def atomic_replace(staged, target, expected_hash=None):
+    for delay in (0, .08, .16, .32, .5, .8):
+        if delay:
+            time.sleep(delay)
+        try:
+            if expected_hash is not None and digest(target) != expected_hash:
+                raise ValueError('文件已被其他程序修改，已停止替换，请重新导入后重试')
+            os.replace(staged, target)
+            return
+        except PermissionError:
+            continue
+    raise PermissionError('Windows 拒绝替换文件：文件可能被其他播放器占用、设为只读，或目录不允许修改。'
+                          '原文件未替换，备份已保留。请关闭占用程序后重试，或选择「另存整理副本」。')
+
+
+def write_tags(track: Track, lyrics: str | None, cover: bytes | None, romaji: str | None = None,
+               provenance: dict | None = None, *, replace_cover=False, output_path=None) -> dict:
     """Stage -> validate -> exclusive backup -> atomic replacement. Never re-encode."""
     src = Path(track.path)
+    dst = Path(output_path).resolve() if output_path else src
+    is_copy = dst != src
     if src.suffix.lower() not in WRITABLE:
         raise ValueError('此格式仅支持分析；嵌入支持 FLAC、MP3、M4A')
+    if is_copy and (dst.exists() or dst.suffix.lower() != src.suffix.lower()):
+        raise ValueError('另存目标必须是同扩展名的新文件，不能覆盖已有文件')
+    if not is_copy and not (src.stat().st_mode & stat.S_IWRITE):
+        raise PermissionError('原文件设置为只读。请取消只读属性，或选择「另存整理副本」。')
+    if lyrics is None and cover is None and romaji is None:
+        raise ValueError('没有待写入的内容')
     original_hash = digest(src)
     # Validate and normalize before touching any file.
     cover = image_bytes(cover) if cover else None
-    backup_dir = src.parent / '.mio' / 'backups'
+    backup_dir = dst.parent / '.mio' / 'backups'
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup = backup_dir / (src.name + '.' + original_hash[:16] + '.bak')
-    fd, tmp = tempfile.mkstemp(prefix='.mio-', suffix=src.suffix, dir=src.parent)
+    fd, tmp = tempfile.mkstemp(prefix='.mio-', suffix=src.suffix, dir=dst.parent)
     os.close(fd)
     try:
         shutil.copy2(src, tmp)
+        os.chmod(tmp, os.stat(tmp).st_mode | stat.S_IWRITE)
         audio = mutagen.File(tmp)
         if audio.tags is None:
             audio.add_tags()
         if isinstance(audio, FLAC):
             if lyrics is not None:
                 audio['lyrics'] = lyrics
+            if romaji is not None:
                 audio['MIO_ROMAJI'] = romaji
-            if cover and not audio.pictures:
+            if cover and (replace_cover or not audio.pictures):
+                if replace_cover:
+                    other_pictures = [p for p in audio.pictures if p.type != 3]
+                    audio.clear_pictures()
+                    for other in other_pictures:
+                        audio.add_picture(other)
                 pic = Picture()
                 pic.type, pic.mime, pic.desc, pic.data = 3, 'image/jpeg', 'Front cover', cover
                 with Image.open(BytesIO(cover)) as im:
@@ -207,15 +246,22 @@ def write_tags(track: Track, lyrics: str | None, cover: bytes | None, romaji: st
             if lyrics is not None:
                 audio.tags.delall('USLT')
                 audio.tags.add(USLT(encoding=3, lang='und', desc='', text=lyrics))
+            if romaji is not None:
                 audio.tags.add(TXXX(encoding=3, desc='MIO_ROMAJI', text=[romaji]))
-            if cover and not audio.tags.getall('APIC'):
+            if cover and (replace_cover or not audio.tags.getall('APIC')):
+                if replace_cover:
+                    other_pictures = [p for p in audio.tags.getall('APIC') if p.type != 3]
+                    audio.tags.delall('APIC')
+                    for other in other_pictures:
+                        audio.tags.add(other)
                 audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Front cover', data=cover))
         elif isinstance(audio, MP4):
             if lyrics is not None:
                 audio['\xa9lyr'] = [lyrics]
+            if romaji is not None:
                 audio['----:com.mio:ROMAJI'] = [romaji.encode('utf-8')]
-            if cover and not audio.get('covr'):
-                audio['covr'] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)]
+            if cover and (replace_cover or not audio.get('covr')):
+                audio['covr'] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)] + list(audio.get('covr', []))[1:]
         else:
             raise ValueError('不支持此音频容器的写入')
         audio.save()
@@ -224,8 +270,12 @@ def write_tags(track: Track, lyrics: str | None, cover: bytes | None, romaji: st
             raise ValueError('写入校验失败：音频时长发生变化')
         if lyrics is not None and check.lyrics != lyrics:
             raise ValueError('写入校验失败：歌词不一致')
+        if romaji is not None and check.romaji != romaji:
+            raise ValueError('写入校验失败：罗马音不一致')
         if cover and not check.cover:
             raise ValueError('写入校验失败：封面未写入')
+        if cover and (replace_cover or not track.cover) and check.cover != cover:
+            raise ValueError('写入校验失败：封面与所选图片不一致')
         if digest(src) != original_hash:
             raise ValueError('原文件被其他程序修改，请重新导入后重试')
         if not backup.exists():
@@ -236,12 +286,23 @@ def write_tags(track: Track, lyrics: str | None, cover: bytes | None, romaji: st
                 pass
         if digest(backup) != original_hash:
             raise ValueError('备份验证失败，原文件未修改')
-        os.replace(tmp, src)
-        record = {'time': datetime.now().isoformat(timespec='seconds'), 'path': str(src),
-                  'backup': str(backup), 'before_sha256': original_hash, 'after_sha256': digest(src),
-                  'sources': provenance or {}}
+        if is_copy:
+            # Publish a validated new file without overwriting a raced-in destination.
+            if os.name == 'nt':
+                os.rename(tmp, dst)  # Windows rename fails if destination exists.
+            else:
+                os.link(tmp, dst)
+                os.unlink(tmp)
+        else:
+            atomic_replace(tmp, src, original_hash)
+        record = {'time': datetime.now().isoformat(timespec='seconds'), 'path': str(dst),
+                  'original_path': str(src), 'action': 'copy' if is_copy else 'write', 'record_id': str(uuid.uuid4()),
+                  'backup': str(backup), 'before_sha256': original_hash, 'after_sha256': digest(dst),
+                  'sources': provenance or {}, 'log_path': str(dst.parent / '.mio' / 'history.jsonl'),
+                  'changes': {'lyrics': lyrics is not None, 'romaji': romaji is not None,
+                              'cover': bool(cover), 'replace_cover': bool(cover and replace_cover)}}
         try:
-            with open(src.parent / '.mio' / 'history.jsonl', 'a', encoding='utf-8') as f:
+            with open(record['log_path'], 'a', encoding='utf-8') as f:
                 f.write(json.dumps(record, ensure_ascii=False) + '\n')
         except OSError as e:
             record['warning'] = '已写入且保留备份，但操作记录保存失败：' + str(e)
@@ -257,11 +318,14 @@ def restore(record):
         raise ValueError('文件在写入后已变化，拒绝覆盖。请手动检查备份。')
     if digest(backup) != record['before_sha256']:
         raise ValueError('备份完整性校验失败')
+    if record.get('action') == 'copy':
+        src.unlink()
+        return
     fd, tmp = tempfile.mkstemp(prefix='.mio-restore-', suffix=src.suffix, dir=src.parent)
     os.close(fd)
     try:
         shutil.copy2(backup, tmp)
-        os.replace(tmp, src)
+        atomic_replace(tmp, src, record['after_sha256'])
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)

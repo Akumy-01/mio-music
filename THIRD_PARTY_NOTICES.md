@@ -42,3 +42,7 @@ Cover Art Archive: https://musicbrainz.org/doc/Cover_Art_Archive
 These services are independent of Mio. Service availability is not guaranteed. Lyrics and cover art remain subject to their respective rights and source terms. Source code licensing does not grant rights to redistribute fetched lyrics or artwork. No commercial music, full lyrics or album covers are included in the repository or application package.
 
 The Mio icon and documentation example text/audio are generated specifically for this project and are distributed under the project's GPL v3 license.
+
+## Optional Spotify service
+
+Includes modified source from https://github.com/akashrchandran/spotify-lyrics-api at commit e158b96b854778d8ff51a3c9544ebb4f68b64907, licensed GPL-3.0-only. Copyright Akash R Chandran and upstream contributors. Full upstream LICENSE, source and modification notice retained in integrations/spotify-lyrics-api. No Spotify account credentials are distributed. The upstream is unofficial and warns about service terms. See docs/SPOTIFY.md for configuration and validation limits.

@@ -26,12 +26,16 @@ root = Path(__file__).resolve().parents[1]
 def capture():
     w.grab().save(str(root / 'docs' / 'screenshot-empty.png'))
     with tempfile.TemporaryDirectory() as d:
-        path = Path(d) / 'A quiet morning.wav'
+        path = Path(d) / 'A quiet morning.flac'
         sr = 44100
         t = np.arange(sr*30)/sr
         rng = np.random.default_rng(41)
         x = .22*np.sin(2*np.pi*440*t) + .08*np.sin(2*np.pi*880*t) + .005*rng.normal(size=t.shape)
-        write(path, sr, (x*32767).astype(np.int16))
+        wav_path = path.with_suffix('.wav')
+        write(wav_path, sr, (x*32767).astype(np.int16))
+        import subprocess, imageio_ffmpeg
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-v', 'error', '-i', str(wav_path), str(path)],
+                       check=True, capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         track = read_track(str(path))
         track.artist, track.album = 'Mio Studio', 'Small moments'
         w.tracks.append(track)
@@ -49,6 +53,13 @@ def capture():
             QTimer.singleShot(400, shot2)
         def shot2():
             w.grab().save(str(root / 'docs' / 'screenshot-lyrics.png'))
+            w.remember_lyric('原创示例 · 原文', w.lyrics.toPlainText(), '原创演示文本')
+            w.remember_cover('原创演示封面', (root/'assets/mio.png').read_bytes(), 'Mio 原创图标演示')
+            w.write_panel.select_lyrics('preview')
+            w.tabs.setCurrentIndex(3)
+            QTimer.singleShot(350, shot3)
+        def shot3():
+            w.grab().save(str(root / 'docs' / 'screenshot-write.png'))
             from PySide6.QtCore import QUrl
             w.player.setSource(QUrl())
             app.quit()
@@ -56,7 +67,7 @@ def capture():
         # Keep temporary audio alive until screenshots are captured.
         from PySide6.QtCore import QEventLoop
         loop = QEventLoop()
-        QTimer.singleShot(1300, loop.quit)
+        QTimer.singleShot(1800, loop.quit)
         loop.exec()
 QTimer.singleShot(400, capture)
 app.exec()

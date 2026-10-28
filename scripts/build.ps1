@@ -19,6 +19,9 @@ Copy-Item -LiteralPath LICENSE -Destination "$mioOutputPath/LICENSE" -Force
 Copy-Item -LiteralPath THIRD_PARTY_NOTICES.md -Destination "$mioOutputPath/THIRD_PARTY_NOTICES.md" -Force
 Copy-Item -LiteralPath docs -Destination "$mioOutputPath/docs" -Recurse -Force
 Copy-Item -LiteralPath assets -Destination "$mioOutputPath/assets" -Recurse -Force
+Copy-Item -LiteralPath integrations -Destination "$mioOutputPath/integrations" -Recurse -Force
+New-Item -ItemType Directory -Force "$mioOutputPath/scripts" | Out-Null
+Copy-Item -LiteralPath scripts/start-spotify.ps1 -Destination "$mioOutputPath/scripts/start-spotify.ps1" -Force
 & $pythonExe scripts/collect_licenses.py "$mioOutputPath/licenses"
 if ($LASTEXITCODE -ne 0) { throw '许可收集失败' }
 Write-Output "生成完毕：$mioOutputPath/MioMusic.exe（分发时请打包整个 MioMusic 文件夹）"
