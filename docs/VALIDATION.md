@@ -6,7 +6,7 @@ Windows x64 本机自动测试共 60 项通过。新增真实 Windows CreateFile
 
 Spotify 覆盖：URL / URI / ID 校验、服务地址约束、本地真实 HTTP 合约请求、原始和 LRC 同步格式、普通文本、401 / 404 / 429 / 503、空内容与敏感错误隐藏。当前无 Spotify 个人会话，Docker 引擎未启动；这些测试不代表真实 Spotify 账号取词成功。Linux CI 单独构建可选服务并执行 PHP 语法与无凭据错误检查。
 
-源码启动烟雾检查另验证完整 GUI 写入计划 → 异步保存 → 记录选择 → 撤销恢复，以及 Spotify 本地协议请求；最终 EXE 会执行同样检查。
+源码启动烟雾检查另验证完整 GUI 写入计划 → 异步保存 → 记录选择 → 撤销恢复，以及 Spotify 本地协议请求；最终 Windows EXE 已通过同样的八项检查（见 packaged-smoke-v1.2.json），包含真实 GUI 保存与选中记录撤销。另在 GitHub Actions 运行 40716234450 中，Windows 构建检查与可选 Spotify Docker 服务构建 / PHP 语法 / 无凭据协议检查均通过。Spotify 真实账号访问仍未验证。
 
 ---
 
