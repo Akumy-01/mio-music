@@ -1,0 +1,50 @@
+{
+  "ok": true,
+  "version": "1.1.0",
+  "statuses": [
+    {
+      "source": "kugou",
+      "label": "酷狗音乐",
+      "ok": true,
+      "count": 8,
+      "message": "在线 · 8 个候选"
+    },
+    {
+      "source": "netease",
+      "label": "网易云音乐",
+      "ok": true,
+      "count": 8,
+      "message": "在线 · 8 个候选"
+    },
+    {
+      "source": "lrclib",
+      "label": "LRCLIB",
+      "ok": true,
+      "count": 12,
+      "message": "在线 · 12 个候选"
+    }
+  ],
+  "fetches": [
+    {
+      "source": "netease",
+      "ok": true,
+      "characters": 1100,
+      "romaji_characters": 2189,
+      "stale": false
+    },
+    {
+      "source": "kugou",
+      "ok": true,
+      "characters": 3323,
+      "romaji_characters": 0,
+      "stale": false
+    },
+    {
+      "source": "lrclib",
+      "ok": true,
+      "characters": 997,
+      "romaji_characters": 0,
+      "stale": false
+    }
+  ]
+}

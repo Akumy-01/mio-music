@@ -6,6 +6,8 @@
 
 实际联网使用 `scripts/check_lyrics.py` 强制刷新，对《Lemon / 米津玄師》《晴天 / 周杰伦》《Hello / Adele》逐源搜索与正文获取，九次正文获取均成功，网易云日语候选同时返回译文与罗马音；歌词正文未写入仓库。元数据诊断见 `lyrics-network-v1.1.json`。QQ 搜索实测返回 HTTP 500，本版未将其接入作为可用来源。
 
+最终 Windows EXE（非源码解释运行）另行执行离线六项检查与 `--lyrics-smoke-test`：三源搜索及正文获取均成功，网易云返回 2,189 字符罗马音；未使用过期缓存。打包联网结果见 `packaged-lyrics-v1.1.json`。
+
 以下保留 1.0 原有验证记录。
 
 ---
