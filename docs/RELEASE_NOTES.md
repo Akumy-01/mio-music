@@ -19,6 +19,6 @@
 
 ## 验证
 
-59 项自动测试通过，包含三种容器的封面替换/其他图片保留、独立罗马音、自选写入计划、副本与撤销、Windows 文件锁、试听释放，以及 Spotify 协议本地 HTTP 测试。Spotify 真实账号访问不包含在上述成功声明中。使用前请阅读 docs/SPOTIFY.md。
+60 项自动测试通过，包含三种容器的封面替换/其他图片保留、独立罗马音、自选写入计划、副本与撤销、Windows 文件锁、试听释放，以及 Spotify 协议本地 HTTP 测试。Spotify 真实账号访问不包含在上述成功声明中。使用前请阅读 docs/SPOTIFY.md。
 
 下载 MioMusic-windows-x64.zip，完整解压后运行 MioMusic.exe。退出旧版后从新目录启动，确认右上角 v1.2.0。无需安装 Python；可选 Spotify 后端需要 Docker Desktop 和自己的 SP_DC。

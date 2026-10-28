@@ -298,7 +298,7 @@ def write_tags(track: Track, lyrics: str | None, cover: bytes | None, romaji: st
                 os.unlink(tmp)
         else:
             atomic_replace(tmp, src, original_hash)
-        record = {'time': datetime.now().isoformat(timespec='seconds'), 'path': str(dst),
+        record = {'time': datetime.now().isoformat(timespec='microseconds'), 'path': str(dst),
                   'original_path': str(src), 'action': 'copy' if is_copy else 'write', 'record_id': str(uuid.uuid4()),
                   'backup': str(backup), 'before_sha256': original_hash, 'after_sha256': digest(dst),
                   'sources': provenance or {}, 'log_path': str(dst.parent / '.mio' / 'history.jsonl'),

@@ -116,3 +116,20 @@ def test_lazy_playback_released_before_real_write(tmp_path):
     write_tags(w.current(), 'original test lyric', None)
     assert read_track(str(path)).lyrics == 'original test lyric'
     w.close()
+
+
+def test_same_second_history_selects_latest_append(tmp_path):
+    import json
+    path = str(tmp_path / 'example.flac')
+    directory = tmp_path / '.mio'
+    directory.mkdir()
+    records = [{'record_id': key, 'time': '2026-10-28T20:00:00', 'path': path,
+                'after_sha256': key, 'backup': str(directory/'backup.bak')} for key in ('earlier', 'latest')]
+    (directory/'history.jsonl').write_text('\n'.join(json.dumps(r) for r in records), encoding='utf-8')
+    app = QApplication.instance() or QApplication([])
+    w = Window()
+    w.tracks = [Track(path, 'Example')]
+    w.list.addItem('Example')
+    w.list.setCurrentRow(0)
+    assert w.write_panel.selected_record()['record_id'] == 'latest'
+    w.close()

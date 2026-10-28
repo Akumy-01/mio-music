@@ -17,7 +17,7 @@ Mio 是面向本地音乐收藏者的 Windows 桌面应用。把文件或文件�
 
 ![保存内容预览](docs/screenshot-write.png)
 
-59 项自动测试通过。现有网易云、酷狗、LRCLIB 多源查询继续保留。详见 [更新说明](docs/RELEASE_NOTES.md)。
+60 项自动测试通过。现有网易云、酷狗、LRCLIB 多源查询继续保留。详见 [更新说明](docs/RELEASE_NOTES.md)。
 
 ## 下载与启动
 

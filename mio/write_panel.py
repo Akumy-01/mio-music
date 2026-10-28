@@ -263,7 +263,7 @@ class WritePanel(QWidget):
         for i, r in enumerate(records):
             changes = r.get('changes', {})
             names = '、'.join(n for n, k in [('歌词', 'lyrics'), ('封面', 'cover'), ('罗马音', 'romaji')] if changes.get(k)) or '标签'
-            for j, text in enumerate([r.get('time', '').replace('T', ' '), '另存副本' if r.get('action') == 'copy' else '更新原件', names, Path(r.get('path', '')).name]):
+            for j, text in enumerate([r.get('time', '').split('.')[0].replace('T', ' '), '另存副本' if r.get('action') == 'copy' else '更新原件', names, Path(r.get('path', '')).name]):
                 item = QTableWidgetItem(text)
                 item.setToolTip(r.get('path', ''))
                 self.table.setItem(i, j, item)

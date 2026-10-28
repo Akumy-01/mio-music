@@ -933,6 +933,7 @@ class Window(QMainWindow):
             if r.get('path') == t.path or r.get('original_path') == t.path:
                 records[r.get('record_id') or (r.get('path'), r.get('after_sha256'))] = r
         rows = [r for k, r in records.items() if k not in undone]
+        rows.reverse()  # For legacy second-resolution timestamps, last appended wins ties.
         rows.sort(key=lambda r: r.get('time', ''), reverse=True)
         self.write_panel.set_records(rows[:200])
 
