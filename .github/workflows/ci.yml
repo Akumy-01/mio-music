@@ -19,6 +19,7 @@ jobs:
         run: |
           gh release view $env:GITHUB_REF_NAME --json id 2>$null
           if ($LASTEXITCODE -eq 0) { 'exists=true' >> $env:GITHUB_OUTPUT } else { 'exists=false' >> $env:GITHUB_OUTPUT }
+          exit 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
